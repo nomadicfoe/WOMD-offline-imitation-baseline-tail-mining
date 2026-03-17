@@ -1,27 +1,26 @@
-# womd-motion-baseline
+# womd-motion-forecasting
 
-Behavior cloning baseline for motion forecasting on the Waymo Open Motion Dataset, with tail-scenario mining to find where models actually fail.
+Two-notebook progression from a simple behavior cloning baseline to a map-aware multi-modal motion predictor on the Waymo Open Motion Dataset.
 
-I built this to understand what a "real" motion forecasting pipeline looks like from scratch — starting with raw WOMD TFRecords on GCS, building up feature extraction, training CV/MLP/GRU baselines, and then running slice-based evaluation to see whether models fail more on close-interaction and high-curvature scenarios than on average. Spoiler: ADE doesn't actually capture tail difficulty well, which turned out to be the most interesting finding.
+The first notebook establishes a baseline and figures out what actually matters — normalization, history length, evaluation metrics. The second builds a proper model that uses HD map lanes, nearby agent context, and predicts six possible futures instead of one. The jump from 5.3m ADE to 1.88m minADE@6 comes almost entirely from giving the model access to the road geometry.
 
 ---
 
-## What this covers
+## Notebooks
 
-- Streaming WOMD v1.3.1 TFRecords directly from GCS in Colab
-- Tail slicer — two criteria: close-interaction (agents within 5m) and high-curvature (turning radius < 20m)
-- Three baselines: constant velocity (no learning), MLP (flatten history), GRU (sequential)
-- Ego-frame normalization — turned out to be the single most important preprocessing step
-- Slice-aware eval — ADE/FDE broken out per tail slice, not just aggregate
-- Ablations on history length (1s / 3s / 5s) and prediction horizon (3s / 5s / 8s)
+**`phase_setup.ipynb`** — baseline pipeline
 
-The notebook is one file, runs end-to-end in Colab, and saves features + checkpoints to GCS so you don't have to re-process shards every session.
+Covers the full stack from raw TFRecords to trained models: GCS data access, feature extraction, tail slicing, CV/MLP/GRU training, slice-aware evaluation, and ablation studies on history length and prediction horizon.
+
+**`motion_predictor_clean.ipynb`** — map-aware multi-modal model
+
+Extends the baseline with HD map lane encoding (PointNet per polyline), social agent attention, and K=6 trajectory modes trained with winner-takes-all loss. Includes animated scenario visualizations and MP4 export.
 
 ---
 
 ## Results
 
-### Model comparison
+### Baseline: CV vs MLP vs GRU across tail slices
 
 | Slice | CV | MLP | GRU |
 |-------|----|-----|-----|
@@ -32,39 +31,55 @@ The notebook is one file, runs end-to-end in Colab, and saves features + checkpo
 
 *ADE in meters, 8s horizon, 43k agent-samples from 50 val shards.*
 
-<!-- drop your plot here -->
+<!-- add baseline comparison plot -->
 <img src="results/final_results.png" width="800"/>
 
-### Ablation — history length vs prediction horizon
+### MTR-Lite: map-aware multi-modal model
 
-The history length result surprised me. Going from 1s → 5s of history drops ADE by 79% (6.2m → 1.3m), and the improvement is almost identical across tail and aggregate slices. Prediction horizon error compounds much faster than linearly — 8s is 6× harder than 3s, not 2.7×.
+| Slice | GRU (baseline) | MTR-Lite | improvement |
+|-------|---------------|----------|-------------|
+| Aggregate | 5.28m ADE | 1.88m minADE@6 | 64% |
+| Close-interaction | 5.27m ADE | — | — |
+| High-curvature | 5.17m ADE | — | — |
+| Both (hardest) | 5.14m ADE | — | — |
 
-<!-- drop your ablation plot here -->
+*minADE@6 = best of 6 predicted modes. Fill in your slice eval numbers above.*
+
+<!-- add MTR-Lite progression plot -->
+<img src="results/mtr_progression.png" width="800"/>
+
+### Ablation — history length and prediction horizon
+
+Going from 1s to 5s of history drops ADE by 79% (6.2m to 1.3m), uniformly across all tail slices. Prediction error compounds faster than linearly with horizon — 8s is 6x harder than 3s, not the 2.7x you'd expect from linear scaling.
+
+<!-- add ablation plot -->
 <img src="results/ablation_results.png" width="800"/>
 
 ---
 
-## Things I found interesting
+## What I found along the way
 
-**Normalization matters more than architecture.** Before adding ego-frame rotation + velocity scaling, MLP was actually worse than the no-learning constant velocity baseline (11.4m vs 9.3m ADE). After normalization it dropped to 5.4m. The GRU only beats MLP by ~0.1m — with 1s history, flattening the sequence barely loses anything.
+**Normalization is the biggest single fix.** Before ego-frame rotation and velocity scaling, MLP scored 11.4m ADE — worse than the no-learning constant velocity baseline at 9.3m. After normalization it dropped to 5.4m. The architecture barely matters until the input representation is right.
 
-**Tail scenarios aren't harder by ADE.** The "Both (hardest)" slice consistently scores slightly lower ADE than aggregate. This is because close-interaction and high-curvature scenarios tend to involve slower agents — absolute displacement is smaller. If you want to actually stress-test tail performance, you'd need collision rate or relative displacement metrics, not ADE.
+**Tail scenarios aren't harder by ADE.** The "Both (hardest)" slice scores slightly *lower* ADE than aggregate across all models. Close-interaction and high-curvature scenarios tend to involve slower-moving agents so absolute displacement is smaller. ADE doesn't capture what makes these scenarios actually dangerous — you'd need collision rate or relative displacement metrics for that. This was the most interesting finding from the first notebook.
 
-**History length is the dominant knob.** More history helps uniformly across all slices. Longer horizons just make everything harder at the same relative rate across slices.
+**Map context explains most of the MTR-Lite improvement.** The jump from 5.3m to 1.88m comes primarily from the model knowing where the road is. Without lane context, a vehicle turning left looks identical to one going straight until the turn starts. With lanes, the model can assign probability to the correct mode from the beginning of the prediction window.
+
+**MLP is actually competitive with GRU at short history.** With 1s of history (11 steps), flattening the sequence into a vector loses almost nothing — GRU only beats MLP by 0.1m. The recurrent structure starts to matter more as history length increases, which the ablation confirms.
 
 ---
 
-## Running this yourself
+## Running this
 
 ### What you need
 
-- A Google account + GCP project (the $300 free credits are more than enough — this whole project cost ~$2)
-- Waymo license agreement signed (free, takes 5 minutes)
-- Google Colab (free T4 GPU tier is fine)
+- Google account + GCP project (the $300 free credits cover this comfortably, total spend was around $2-3)
+- Waymo license agreement signed at waymo.com/open/terms — non-commercial, free
+- Google Colab with T4 GPU runtime
 
-### Step 1 — GCP project setup
+### GCP setup
 
-If you're starting from scratch, open Cloud Shell at [console.cloud.google.com](https://console.cloud.google.com) and run:
+Open Cloud Shell at console.cloud.google.com:
 
 ```bash
 export PROJECT_ID=your-project-id
@@ -73,83 +88,96 @@ export BUCKET=gs://${PROJECT_ID}-data
 gcloud services enable storage.googleapis.com aiplatform.googleapis.com
 gsutil mb -p $PROJECT_ID -l us-central1 -c STANDARD $BUCKET
 
-# create folder structure
 for folder in raw features checkpoints results plots; do
   gsutil cp /dev/null $BUCKET/$folder/.keep
 done
 ```
 
-### Step 2 — Sign the Waymo license
+### Waymo license
 
-Go to [waymo.com/open/terms](https://waymo.com/open/terms) and accept the Non-Commercial Use agreement. Use the **exact same Google account** as your GCP project — this is the only thing that can go wrong here and it's easy to miss.
-
-After signing, wait about 5 minutes then verify:
+Go to waymo.com/open/terms and accept the Non-Commercial Use agreement using the **exact same Google account** as your GCP project. Wait 5 minutes then verify:
 
 ```bash
 gsutil ls gs://waymo_open_dataset_motion_v_1_3_1/uncompressed/scenario/
 ```
 
-You should see the training/validation/testing splits listed. If you get `AccessDenied`, double-check the account matches.
+If you get `AccessDenied`, the account doesn't match.
 
-### Step 3 — Open the notebook
+### Notebook 1 — baseline
 
-Upload `phase_setup.ipynb` to Colab, switch runtime to **T4 GPU**, and run Cell 1. It installs deps and authenticates via OAuth. Update these two lines in Cell 3 to match your setup:
+Upload `phase_setup.ipynb` to Colab, set runtime to T4 GPU, run Cell 1. Update these two lines:
 
 ```python
 PROJECT_ID = 'your-project-id'
 GCS_BUCKET = 'your-bucket-name'
 ```
 
-Then run top to bottom. Each phase saves outputs to GCS so if the session drops you can pick up without reprocessing.
+Then run top to bottom. Each phase saves to GCS so a dropped session doesn't mean reprocessing shards.
+
+### Notebook 2 — MTR-Lite
+
+Upload `motion_predictor_clean.ipynb`. The setup cell handles all installs. If features are already saved from notebook 1 you can skip the extraction cell and jump straight to loading data. The model trains in about 20-25 minutes on a T4.
 
 ---
 
 ## GCS layout
 
 ```
-gs://waymo_open_dataset_motion_v_1_3_1/   ← Waymo's bucket (read-only after license)
+gs://waymo_open_dataset_motion_v_1_3_1/     Waymo's bucket (read-only after license)
   uncompressed/scenario/
-    training/        1000 shards
-    validation/      150 shards
-    testing/         150 shards
+    training/               1000 shards
+    validation/             150 shards
+    testing/                150 shards
     validation_interactive/
     testing_interactive/
 
-gs://your-bucket/                          ← your bucket (read/write)
+gs://your-bucket/                            your bucket
   features/
-    val/             early 5-shard run
-    val_v2/          50-shard normalized features (used for final results)
+    val/                    5-shard early run
+    val_v2/                 50-shard normalized (baseline results)
+    map_v1/                 50-shard with map + social features (MTR-Lite)
     ablation_hist_3s/
     ablation_hist_5s/
-  checkpoints/       model .pt files (not in git — too large)
-  results/           metrics JSON
-  plots/             PNG figures
+  checkpoints/              .pt files — not in git
+  results/                  metrics JSON
+  plots/                    PNG figures
 ```
+
+---
+
+## Architecture — MTR-Lite
+
+```
+agent history (11 steps, 5 features)   GRU encoder (128-dim)
+                                                |
+lane polylines (32 lanes, 20 pts each)  PointNet MLP (64-dim)
+                                                |
+                                        cross-attention
+                                                |
+nearby agents (8 agents, 11 steps)     GRU + mean-pool (64-dim)
+                                                |
+                                        concat (192-dim context)
+                                                |
+                                        6x MLP heads + scorer
+                                                |
+                          6 trajectories (80 steps) + mode probabilities
+```
+
+Trained with winner-takes-all loss: regression on the closest mode plus cross-entropy to push its score highest.
 
 ---
 
 ## Dependencies
 
 ```
-waymo-open-dataset-tf-2-12-0   install with --no-deps
+waymo-open-dataset-tf-2-12-0   --no-deps flag required
 tensorflow >= 2.16
 torch >= 2.0
-numpy, pandas, matplotlib, seaborn, tqdm
-google-cloud-storage, protobuf
+numpy, matplotlib, tqdm
+google-cloud-storage
 ```
 
-```python
-!pip install -q waymo-open-dataset-tf-2-12-0 --no-deps
-!pip install -q tensorflow numpy pandas matplotlib seaborn tqdm protobuf
-```
-
-The `--no-deps` flag on the waymo package is important — it ships with a TF 2.12 requirement that no longer exists on PyPI, but the package itself works fine with TF 2.16+.
-
----
-
-## What's next
-
-This is the v1 baseline — agents predicted in a vacuum with no map awareness. The follow-up notebook (`02_map_aware_motion_transformer`) adds HD map lane encoding, multi-agent social attention, and K=6 multi-modal outputs, targeting ~1.5m minADE@6 vs the 5.3m here.
+The `--no-deps` flag matters — the waymo package declares a TF 2.12 requirement that no longer exists on PyPI, but the package itself works fine with newer TF versions.
 
 ---
 
