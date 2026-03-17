@@ -32,7 +32,7 @@ Extends the baseline with HD map lane encoding (PointNet per polyline), social a
 *ADE in meters, 8s horizon, 43k agent-samples from 50 val shards.*
 
 <!-- add baseline comparison plot -->
-<img src="results/final_results.png" width="800"/>
+<!-- img src="results/final_results.png" width="800"/ -->
 
 ### MTR-Lite: map-aware multi-modal model
 
@@ -46,14 +46,14 @@ Extends the baseline with HD map lane encoding (PointNet per polyline), social a
 *minADE@6 = best of 6 predicted modes. Fill in your slice eval numbers above.*
 
 <!-- add MTR-Lite progression plot -->
-<img src="results/mtr_progression.png" width="800"/>
+<!--img src="results/mtr_progression.png" width="800"/-->
 
 ### Ablation — history length and prediction horizon
 
 Going from 1s to 5s of history drops ADE by 79% (6.2m to 1.3m), uniformly across all tail slices. Prediction error compounds faster than linearly with horizon — 8s is 6x harder than 3s, not the 2.7x you'd expect from linear scaling.
 
 <!-- add ablation plot -->
-<img src="results/ablation_results.png" width="800"/>
+<!--img src="results/ablation_results.png" width="800"/-->
 
 ---
 
